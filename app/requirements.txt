@@ -10,3 +10,5 @@ textblob>=0.17.1
 gunicorn
 google-genai>=0.1.0
 python-dotenv>=1.0.0
+pdf2image>=1.17.0
+#poppler-utils=0.1.0

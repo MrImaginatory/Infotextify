@@ -3,11 +3,61 @@ from fastapi.responses import HTMLResponse
 from typing import Optional
 from PIL import Image
 import io
+from pdf2image import convert_from_bytes
 
 from app.schemas.ocr import OCRResponse, FullAnalysisResponse, AIAnalysisResponse
 from app.services import ocr_service, nlp_service, report_service, correction_service, gemini_service
 
+
 router = APIRouter()
+
+async def extract_text_from_file(
+    file: UploadFile, 
+    lang: str, 
+    contrast: float, 
+    brightness: float, 
+    sharpness: float
+) -> str:
+    if file.content_type == "application/pdf":
+        file_bytes = await file.read()
+        try:
+            images = convert_from_bytes(file_bytes)
+        except Exception as e:
+            raise HTTPException(400, detail=f"Invalid PDF file: {str(e)}")
+            
+        full_text = []
+        for i, image in enumerate(images):
+            try:
+                page_text = ocr_service.extract_text(
+                    image, 
+                    lang=lang, 
+                    contrast=contrast, 
+                    brightness=brightness, 
+                    sharpness=sharpness
+                )
+                full_text.append(f"--- Page {i+1} ---\n{page_text}")
+            except Exception as e:
+                full_text.append(f"--- Page {i+1} (Error) ---\n[{str(e)}]")
+                
+        return "\n\n".join(full_text)
+        
+    elif file.content_type and file.content_type.startswith("image/"):
+        image_data = await file.read()
+        try:
+            image = Image.open(io.BytesIO(image_data))
+        except Exception:
+            raise HTTPException(400, detail="Invalid image file")
+            
+        return ocr_service.extract_text(
+            image, 
+            lang=lang, 
+            contrast=contrast, 
+            brightness=brightness, 
+            sharpness=sharpness
+        )
+    else:
+        raise HTTPException(400, detail="File must be an image or PDF")
+
 
 @router.post("/extract", response_model=OCRResponse)
 async def extract_text_endpoint(
@@ -21,14 +71,9 @@ async def extract_text_endpoint(
     """
     Extract text from an uploaded image file.
     """
-    if file.content_type and not file.content_type.startswith("image/"):
-        raise HTTPException(400, detail="File must be an image")
-    
     try:
-        image_data = await file.read()
-        image = Image.open(io.BytesIO(image_data))
-        text = ocr_service.extract_text(
-            image, 
+        text = await extract_text_from_file(
+            file, 
             lang=lang, 
             contrast=contrast, 
             brightness=brightness, 
@@ -55,15 +100,10 @@ async def analyze_text_endpoint(
     """
     Extract text and perform NLP analysis.
     """
-    if file.content_type and not file.content_type.startswith("image/"):
-        raise HTTPException(400, detail="File must be an image")
-
     try:
         # Step 1: OCR
-        image_data = await file.read()
-        image = Image.open(io.BytesIO(image_data))
-        text = ocr_service.extract_text(
-            image, 
+        text = await extract_text_from_file(
+            file, 
             lang=lang, 
             contrast=contrast, 
             brightness=brightness, 
@@ -101,15 +141,10 @@ async def analyze_text_report_endpoint(
     Extract text and perform NLP analysis, returning a formatted text report.
     This mimics the original CLI tool output.
     """
-    if file.content_type and not file.content_type.startswith("image/"):
-        raise HTTPException(400, detail="File must be an image")
-
     try:
         # Step 1: OCR
-        image_data = await file.read()
-        image = Image.open(io.BytesIO(image_data))
-        text = ocr_service.extract_text(
-            image, 
+        text = await extract_text_from_file(
+            file, 
             lang=lang, 
             contrast=contrast, 
             brightness=brightness, 
@@ -145,15 +180,10 @@ async def analyze_html_report_endpoint(
     """
     Extract text and perform NLP analysis, returning an HTML report.
     """
-    if file.content_type and not file.content_type.startswith("image/"):
-        raise HTTPException(400, detail="File must be an image")
-
     try:
         # Step 1: OCR
-        image_data = await file.read()
-        image = Image.open(io.BytesIO(image_data))
-        text = ocr_service.extract_text(
-            image, 
+        text = await extract_text_from_file(
+            file, 
             lang=lang, 
             contrast=contrast, 
             brightness=brightness, 
@@ -190,15 +220,10 @@ async def analyze_ai_endpoint(
     """
     Extract text, perform NLP analysis, and use Gemini AI for advanced correction and summarization.
     """
-    if file.content_type and not file.content_type.startswith("image/"):
-        raise HTTPException(400, detail="File must be an image")
-
     try:
         # Step 1: OCR
-        image_data = await file.read()
-        image = Image.open(io.BytesIO(image_data))
-        text = ocr_service.extract_text(
-            image, 
+        text = await extract_text_from_file(
+            file, 
             lang=lang, 
             contrast=contrast, 
             brightness=brightness, 
