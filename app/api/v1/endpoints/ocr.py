@@ -6,7 +6,7 @@ import io
 from pdf2image import convert_from_bytes
 
 from app.schemas.ocr import OCRResponse, FullAnalysisResponse, AIAnalysisResponse
-from app.services import ocr_service, nlp_service, report_service, correction_service, gemini_service
+from app.services import ocr_service, nlp_service, report_service, correction_service, gemini_service, ollama_service
 
 
 router = APIRouter()
@@ -242,6 +242,54 @@ async def analyze_ai_endpoint(
         
         # Step 4: Gemini AI correction and summarization
         ai_result = gemini_service.get_ai_correction_and_summary(text)
+
+        return AIAnalysisResponse(
+            text=text,
+            corrected_text=corrected_text,
+            nlp_analysis=nlp_result,
+            ai_corrected_text=ai_result.get("corrected_text"),
+            summary=ai_result.get("summary"),
+            ai_score=ai_result.get("ai_score")
+        )
+
+    except Exception as e:
+        raise HTTPException(500, detail=f"Processing error: {str(e)}")
+
+
+@router.post("/analyze/ollama", response_model=AIAnalysisResponse)
+async def analyze_ollama_endpoint(
+    file: UploadFile = File(...),
+    lang: str = Form("eng"),
+    autocorrect: bool = Form(False),
+    contrast: float = Form(1.0),
+    brightness: float = Form(1.0),
+    sharpness: float = Form(1.0)
+):
+    """
+    Extract text, perform NLP analysis, and use local Ollama AI for advanced correction and summarization.
+    """
+    try:
+        # Step 1: OCR
+        text = await extract_text_from_file(
+            file, 
+            lang=lang, 
+            contrast=contrast, 
+            brightness=brightness, 
+            sharpness=sharpness
+        )
+        
+        # Step 2: NLP
+        nlp_result = None
+        if text.strip():
+             nlp_result = nlp_service.process_text(text)
+             
+        # Step 3: Traditional correction (if requested)
+        corrected_text = None
+        if autocorrect:
+            corrected_text = correction_service.correct_text(text)
+        
+        # Step 4: Ollama AI correction and summarization
+        ai_result = ollama_service.get_ai_correction_and_summary(text)
 
         return AIAnalysisResponse(
             text=text,
