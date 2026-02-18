@@ -347,7 +347,9 @@ async def analyze_pdf_per_page_endpoint(
 
         # Step 2: Single batch AI analysis call (Ollama) for all pages
         pages_with_text = [p for p in pages_ocr if p["text"].strip()]
-        batch_results = ollama_service.get_batch_pdf_analysis(pages_with_text) if pages_with_text else []
+        batch_response = ollama_service.get_batch_pdf_analysis(pages_with_text) if pages_with_text else {"pages": [], "potential_enhancements": None}
+        batch_results = batch_response.get("pages", [])
+        potential_enhancements = batch_response.get("potential_enhancements")
 
         # Map batch results back by page number
         batch_map = {}
@@ -389,7 +391,8 @@ async def analyze_pdf_per_page_endpoint(
             total_pages=len(images),
             pages=pages_analysis,
             overall_summary=overall_summary,
-            overall_score=overall_score
+            overall_score=overall_score,
+            potential_enhancements=potential_enhancements
         )
 
     except HTTPException:

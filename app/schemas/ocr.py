@@ -48,3 +48,4 @@ class PDFPageAnalysisResponse(BaseModel):
     pages: List[PageAnalysis]
     overall_summary: Optional[str] = None
     overall_score: Optional[float] = None
+    potential_enhancements: Optional[str] = None

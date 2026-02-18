@@ -129,12 +129,13 @@ def get_batch_pdf_analysis(pages_text: list[dict]) -> list[dict]:
         pages_text: List of dicts with 'page_number' and 'text' keys
         
     Returns:
-        List of dicts with 'corrected_text', 'summary', 'ai_score' per page
+        Dict with 'pages' (list of per-page results) and 'potential_enhancements' (str)
     """
     default_result = {"corrected_text": None, "summary": None, "ai_score": None}
+    empty_response = {"pages": [], "potential_enhancements": None}
     
     if not pages_text:
-        return []
+        return empty_response
 
     try:
         # Build the combined prompt with all pages
@@ -143,7 +144,10 @@ def get_batch_pdf_analysis(pages_text: list[dict]) -> list[dict]:
             pages_block += f"\n=== PAGE {page['page_number']} ===\n{page['text']}\n"
 
         prompt = f"""You are analyzing a multi-page PDF document. Below is OCR-extracted text for each page.
-For EACH page, provide:
+
+Your task has TWO MANDATORY parts:
+
+PART 1 - For EACH page, provide:
 1. A corrected version of the text (be conservative — only fix clear OCR/spelling errors, preserve original meaning and style)
 2. A brief summary of the content
 3. A quality score (0-100) based on readability and accuracy:
@@ -153,7 +157,9 @@ For EACH page, provide:
    - 30-49: Difficult to read with many errors
    - 0-29: Almost illegible
 
-You MUST format your response EXACTLY like this for EACH page (repeat this block for every page):
+PART 2 - MANDATORY: After ALL pages, you MUST provide a "POTENTIAL ENHANCEMENTS:" section with actionable suggestions to improve the overall document.
+
+You MUST format your response EXACTLY like this:
 
 PAGE 1:
 CORRECTED TEXT:
@@ -177,6 +183,11 @@ SCORE:
 
 ... and so on for all pages.
 
+POTENTIAL ENHANCEMENTS:
+[MANDATORY - List specific, actionable suggestions for improving the overall document. Consider: text clarity, structure, formatting, missing information, readability, grammar, content organization, and quality improvements. Provide at least 3-5 suggestions.]
+
+IMPORTANT: You MUST include the "POTENTIAL ENHANCEMENTS:" section at the end. Do NOT skip it.
+
 Here is the OCR text:
 {pages_block}
 """
@@ -186,7 +197,7 @@ Here is the OCR text:
             "prompt": prompt,
             "stream": False,
             "options": {
-                "num_predict": 16384,
+                "num_predict": 32768,
                 "num_ctx": 131072
             }
         }
@@ -195,27 +206,54 @@ Here is the OCR text:
 
         if response.status_code != 200:
             print(f"Error calling Ollama API (batch): Status {response.status_code}, {response.text}")
-            return [dict(default_result) for _ in pages_text]
+            return {"pages": [dict(default_result) for _ in pages_text], "potential_enhancements": None}
 
         result_json = response.json()
         response_text = result_json.get("response", "")
 
-        # Parse per-page results from the response
-        results = _parse_batch_response(response_text, len(pages_text))
-        return results
+        # Debug: log the tail of the response to check if enhancements section was generated
+        print(f"[Ollama Batch] Response length: {len(response_text)} chars")
+        print(f"[Ollama Batch] Last 500 chars: ...{response_text[-500:]}")
+
+        # Parse per-page results and potential enhancements from the response
+        return _parse_batch_response(response_text, len(pages_text))
 
     except Exception as e:
         print(f"Error calling Ollama API (batch): {str(e)}")
-        return [dict(default_result) for _ in pages_text]
+        return {"pages": [dict(default_result) for _ in pages_text], "potential_enhancements": None}
 
 
-def _parse_batch_response(response_text: str, num_pages: int) -> list[dict]:
+def _parse_batch_response(response_text: str, num_pages: int) -> dict:
     """
-    Parse the batch response into per-page results.
+    Parse the batch response into per-page results and potential enhancements.
     Splits by 'PAGE N:' markers and extracts CORRECTED TEXT, SUMMARY, SCORE for each.
+    Also extracts the POTENTIAL ENHANCEMENTS section at the end.
     """
     default_result = {"corrected_text": None, "summary": None, "ai_score": None}
     results = []
+
+    # Extract potential enhancements section first (at the end of response)
+    potential_enhancements = None
+    # Try multiple patterns to catch variations in how the model labels this section
+    enhancement_patterns = [
+        re.compile(r'POTENTIAL\s+ENHANCEMENTS\s*:', re.IGNORECASE),
+        re.compile(r'ENHANCEMENTS\s*:', re.IGNORECASE),
+        re.compile(r'SUGGESTED\s+ENHANCEMENTS\s*:', re.IGNORECASE),
+        re.compile(r'IMPROVEMENTS\s*:', re.IGNORECASE),
+        re.compile(r'SUGGESTIONS\s+FOR\s+IMPROVEMENT\s*:', re.IGNORECASE),
+        re.compile(r'RECOMMENDATIONS\s*:', re.IGNORECASE),
+    ]
+    for pattern in enhancement_patterns:
+        enhancements_match = pattern.search(response_text)
+        if enhancements_match:
+            potential_enhancements = response_text[enhancements_match.end():].strip()
+            # Trim response_text to exclude the enhancements section for page parsing
+            response_text = response_text[:enhancements_match.start()]
+            print(f"[Ollama Batch] Found enhancements with pattern: {pattern.pattern}")
+            break
+    
+    if potential_enhancements is None:
+        print(f"[Ollama Batch] WARNING: No enhancements section found in response")
 
     # Split by PAGE markers (PAGE 1:, PAGE 2:, etc.)
     page_pattern = re.compile(r'PAGE\s+(\d+)\s*:', re.IGNORECASE)
@@ -271,4 +309,8 @@ def _parse_batch_response(response_text: str, num_pages: int) -> list[dict]:
             "ai_score": ai_score
         })
 
-    return results
+    return {
+        "pages": results,
+        "potential_enhancements": potential_enhancements
+    }
+
