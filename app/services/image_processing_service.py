@@ -2,9 +2,9 @@ from PIL import Image, ImageEnhance
 
 def preprocess_image(
     image: Image.Image,
-    contrast: float = 1.0,
-    brightness: float = 1.0,
-    sharpness: float = 1.0
+    contrast: float = 1.8,
+    brightness: float = 1.8,
+    sharpness: float = 1.8
 ) -> Image.Image:
     """
     Apply image enhancements (contrast, brightness, sharpness) to a PIL Image.
@@ -20,17 +20,17 @@ def preprocess_image(
     """
     
     # Apply Contrast
-    if contrast != 1.0:
+    if contrast != 1.8:
         enhancer = ImageEnhance.Contrast(image)
         image = enhancer.enhance(contrast)
         
     # Apply Brightness
-    if brightness != 1.0:
+    if brightness != 1.8:
         enhancer = ImageEnhance.Brightness(image)
         image = enhancer.enhance(brightness)
         
     # Apply Sharpness
-    if sharpness != 1.0:
+    if sharpness != 1.8:
         enhancer = ImageEnhance.Sharpness(image)
         image = enhancer.enhance(sharpness)
         

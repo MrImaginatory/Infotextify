@@ -5,7 +5,7 @@ from PIL import Image
 import io
 from pdf2image import convert_from_bytes
 
-from app.schemas.ocr import OCRResponse, FullAnalysisResponse, AIAnalysisResponse
+from app.schemas.ocr import OCRResponse, FullAnalysisResponse, AIAnalysisResponse, PDFPageAnalysisResponse, PageAnalysis
 from app.services import ocr_service, nlp_service, report_service, correction_service, gemini_service, ollama_service
 
 
@@ -67,7 +67,7 @@ async def extract_text_endpoint(
     contrast: float = Form(1.0),
     brightness: float = Form(1.0),
     sharpness: float = Form(1.0)
-):
+    ):
     """
     Extract text from an uploaded image file.
     """
@@ -96,7 +96,7 @@ async def analyze_text_endpoint(
     contrast: float = Form(1.0),
     brightness: float = Form(1.0),
     sharpness: float = Form(1.0)
-):
+    ):
     """
     Extract text and perform NLP analysis.
     """
@@ -136,7 +136,7 @@ async def analyze_text_report_endpoint(
     contrast: float = Form(1.0),
     brightness: float = Form(1.0),
     sharpness: float = Form(1.0)
-):
+    ):
     """
     Extract text and perform NLP analysis, returning a formatted text report.
     This mimics the original CLI tool output.
@@ -176,7 +176,7 @@ async def analyze_html_report_endpoint(
     contrast: float = Form(1.0),
     brightness: float = Form(1.0),
     sharpness: float = Form(1.0)
-):
+    ):
     """
     Extract text and perform NLP analysis, returning an HTML report.
     """
@@ -216,7 +216,7 @@ async def analyze_ai_endpoint(
     contrast: float = Form(1.0),
     brightness: float = Form(1.0),
     sharpness: float = Form(1.0)
-):
+    ):
     """
     Extract text, perform NLP analysis, and use Gemini AI for advanced correction and summarization.
     """
@@ -264,7 +264,7 @@ async def analyze_ollama_endpoint(
     contrast: float = Form(1.0),
     brightness: float = Form(1.0),
     sharpness: float = Form(1.0)
-):
+    ):
     """
     Extract text, perform NLP analysis, and use local Ollama AI for advanced correction and summarization.
     """
@@ -300,5 +300,87 @@ async def analyze_ollama_endpoint(
             ai_score=ai_result.get("ai_score")
         )
 
+    except Exception as e:
+        raise HTTPException(500, detail=f"Processing error: {str(e)}")
+
+
+@router.post("/analyze/pdf-pages", response_model=PDFPageAnalysisResponse)
+async def analyze_pdf_per_page_endpoint(
+    file: UploadFile = File(...),
+    lang: str = Form("eng"),
+    contrast: float = Form(1.0),
+    brightness: float = Form(1.0),
+    sharpness: float = Form(1.0)
+    ):
+    """
+    Per-page PDF analysis: extracts text from each page individually,
+    then generates an AI summary and quality score for every page using Gemini.
+    Only accepts PDF files.
+    """
+    # Validate that the uploaded file is a PDF
+    if file.content_type != "application/pdf":
+        raise HTTPException(400, detail="This endpoint only accepts PDF files. Use /analyze/ai for images.")
+
+    try:
+        file_bytes = await file.read()
+        try:
+            images = convert_from_bytes(file_bytes)
+        except Exception as e:
+            raise HTTPException(400, detail=f"Invalid PDF file: {str(e)}")
+
+        pages_analysis = []
+
+        for i, image in enumerate(images):
+            page_number = i + 1
+
+            # Step 1: OCR for this page
+            try:
+                page_text = ocr_service.extract_text(
+                    image,
+                    lang=lang,
+                    contrast=contrast,
+                    brightness=brightness,
+                    sharpness=sharpness
+                )
+            except Exception as e:
+                page_text = f"[OCR Error on page {page_number}: {str(e)}]"
+
+            # Step 2: AI analysis for this page (Gemini first, Ollama fallback)
+            ai_result = {"corrected_text": None, "summary": None, "ai_score": None}
+            if page_text.strip():
+                ai_result = gemini_service.get_ai_correction_and_summary(page_text)
+                # Fallback to Ollama if Gemini failed (rate limit, error, etc.)
+                if ai_result.get("summary") is None and ai_result.get("ai_score") is None:
+                    ai_result = ollama_service.get_ai_correction_and_summary(page_text)
+
+            pages_analysis.append(PageAnalysis(
+                page_number=page_number,
+                text=page_text,
+                summary=ai_result.get("summary"),
+                ai_score=ai_result.get("ai_score"),
+                ai_corrected_text=ai_result.get("corrected_text")
+            ))
+
+        # Compute overall score (average of all valid page scores)
+        valid_scores = [p.ai_score for p in pages_analysis if p.ai_score is not None]
+        overall_score = round(sum(valid_scores) / len(valid_scores), 2) if valid_scores else None
+
+        # Compute overall summary (combine page summaries)
+        page_summaries = [
+            f"Page {p.page_number}: {p.summary}"
+            for p in pages_analysis
+            if p.summary
+        ]
+        overall_summary = "\n".join(page_summaries) if page_summaries else None
+
+        return PDFPageAnalysisResponse(
+            total_pages=len(images),
+            pages=pages_analysis,
+            overall_summary=overall_summary,
+            overall_score=overall_score
+        )
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(500, detail=f"Processing error: {str(e)}")

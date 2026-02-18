@@ -35,3 +35,16 @@ class AIAnalysisResponse(BaseModel):
     summary: Optional[str] = None
     ai_score: Optional[float] = None
 
+
+class PageAnalysis(BaseModel):
+    page_number: int
+    text: str
+    summary: Optional[str] = None
+    ai_score: Optional[float] = None
+    ai_corrected_text: Optional[str] = None
+
+class PDFPageAnalysisResponse(BaseModel):
+    total_pages: int
+    pages: List[PageAnalysis]
+    overall_summary: Optional[str] = None
+    overall_score: Optional[float] = None
