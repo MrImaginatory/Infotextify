@@ -328,12 +328,10 @@ async def analyze_pdf_per_page_endpoint(
         except Exception as e:
             raise HTTPException(400, detail=f"Invalid PDF file: {str(e)}")
 
-        pages_analysis = []
-
+        # Step 1: OCR all pages first
+        pages_ocr = []
         for i, image in enumerate(images):
             page_number = i + 1
-
-            # Step 1: OCR for this page
             try:
                 page_text = ocr_service.extract_text(
                     image,
@@ -344,18 +342,32 @@ async def analyze_pdf_per_page_endpoint(
                 )
             except Exception as e:
                 page_text = f"[OCR Error on page {page_number}: {str(e)}]"
+            
+            pages_ocr.append({"page_number": page_number, "text": page_text})
 
-            # Step 2: AI analysis for this page (Gemini first, Ollama fallback)
-            ai_result = {"corrected_text": None, "summary": None, "ai_score": None}
-            if page_text.strip():
-                ai_result = gemini_service.get_ai_correction_and_summary(page_text)
-                # Fallback to Ollama if Gemini failed (rate limit, error, etc.)
-                if ai_result.get("summary") is None and ai_result.get("ai_score") is None:
-                    ai_result = ollama_service.get_ai_correction_and_summary(page_text)
+        # Step 2: Single batch AI analysis call (Ollama) for all pages
+        pages_with_text = [p for p in pages_ocr if p["text"].strip()]
+        batch_results = ollama_service.get_batch_pdf_analysis(pages_with_text) if pages_with_text else []
+
+        # Map batch results back by page number
+        batch_map = {}
+        for idx, page_data in enumerate(pages_with_text):
+            if idx < len(batch_results):
+                batch_map[page_data["page_number"]] = batch_results[idx]
+
+        # Step 3: Build final results, falling back to Gemini for pages where batch failed
+        pages_analysis = []
+        for page_data in pages_ocr:
+            pn = page_data["page_number"]
+            ai_result = batch_map.get(pn, {"corrected_text": None, "summary": None, "ai_score": None})
+
+            # Fallback to Gemini if Ollama batch didn't produce results for this page
+            if ai_result.get("summary") is None and ai_result.get("ai_score") is None and page_data["text"].strip():
+                ai_result = gemini_service.get_ai_correction_and_summary(page_data["text"])
 
             pages_analysis.append(PageAnalysis(
-                page_number=page_number,
-                text=page_text,
+                page_number=pn,
+                text=page_data["text"],
                 summary=ai_result.get("summary"),
                 ai_score=ai_result.get("ai_score"),
                 ai_corrected_text=ai_result.get("corrected_text")
